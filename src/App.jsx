@@ -5,7 +5,6 @@ import {
   Filter, CheckCircle2, XCircle, Clock3, MessageCircle, AlertCircle
 } from 'lucide-react';
 
-// Configuração e inicialização do Firebase
 import { initializeApp } from "firebase/app";
 import { 
   getFirestore, collection, onSnapshot, 
@@ -25,7 +24,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// Definição dos Status e Etiquetas
 const STATUS_OPTIONS = [
   { id: 'lead_novo', label: 'Lead Novo', color: 'bg-amber-500/10 text-amber-500 border-amber-500/20' },
   { id: 'em_atendimento', label: 'Em Atendimento', color: 'bg-blue-500/10 text-blue-500 border-blue-500/20' },
@@ -42,8 +40,38 @@ const TAG_OPTIONS = [
   { id: 'aguardando', label: 'Aguardando Contato', bg: '#6B7280', text: '#FFFFFF', icon: AlertCircle },
 ];
 
+// Helper para converter qualquer string/data para Timestamp numérico
+function getTimestampFromLead(lead) {
+  if (lead.createdAt) {
+    const t = new Date(lead.createdAt).getTime();
+    if (!isNaN(t)) return t;
+  }
+  if (lead.dataIso) {
+    const t = new Date(lead.dataIso).getTime();
+    if (!isNaN(t)) return t;
+  }
+  if (lead.data) {
+    const parts = lead.data.split('/');
+    if (parts.length === 3) {
+      const d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+  }
+  return 0;
+}
+
+// Helper para converter data para YYYY-MM-DD para comparações de filtro
+function getFormattedYMD(lead) {
+  const ts = getTimestampFromLead(lead);
+  if (!ts) return '';
+  const d = new Date(ts);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function App() {
-  // Manter logado após o F5 usando localStorage
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return localStorage.getItem('crm_authenticated') === 'true';
   });
@@ -56,21 +84,36 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTag, setFilterTag] = useState('all');
-  const [filterDate, setFilterDate] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [expandedLeadId, setExpandedLeadId] = useState(null);
 
-  // Escuta em tempo real do Firestore ordenando por criação
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const q = query(collection(db, "leads"), orderBy("createdAt", "desc"));
+    const q = query(collection(db, "leads"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const leadsList = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      setLeads(leadsList);
+
+      // Desduplicação inteligente por Telefone + Nome
+      const uniqueLeads = [];
+      const seenKeys = new Set();
+
+      leadsList.forEach(lead => {
+        const key = `${lead.telefone || ''}_${(lead.nome || '').toLowerCase().trim()}`;
+        if (!seenKeys.has(key) && key !== '_') {
+          seenKeys.add(key);
+          uniqueLeads.push(lead);
+        } else if (key === '_') {
+          uniqueLeads.push(lead);
+        }
+      });
+
+      setLeads(uniqueLeads);
       setLoading(false);
     }, (error) => {
       console.error("Erro ao carregar do Firestore:", error);
@@ -122,10 +165,9 @@ export default function App() {
     }
   };
 
-  // Filtragem e exclusão automática de leads dummy do Meta Ads
+  // Filtragem e Ordenação
   const filteredLeads = leads
     .filter(lead => {
-      // Ignora dados de teste do Meta Ads
       const nome = String(lead.nome || '').toLowerCase();
       if (nome.includes('test lead') || nome.includes('dummy data') || nome === 'full_name') {
         return false;
@@ -140,26 +182,24 @@ export default function App() {
       
       const matchesTag = filterTag === 'all' || lead.tag === filterTag;
       
-      let matchesDate = true;
-      if (filterDate && lead.data) {
-        // Converte data DD/MM/AAAA para AAAA-MM-DD
-        const parts = lead.data.split('/');
-        if (parts.length === 3) {
-          const leadDateFormatted = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-          matchesDate = leadDateFormatted === filterDate;
-        }
+      const leadYMD = getFormattedYMD(lead);
+      let matchesStartDate = true;
+      let matchesEndDate = true;
+
+      if (startDate) {
+        matchesStartDate = leadYMD >= startDate;
+      }
+      if (endDate) {
+        matchesEndDate = leadYMD <= endDate;
       }
 
-      return matchesSearch && matchesTag && matchesDate;
+      return matchesSearch && matchesTag && matchesStartDate && matchesEndDate;
     })
     .sort((a, b) => {
-      // Ordena garantindo os mais recentes primeiro
-      const dateA = new Date(a.dataIso || a.createdAt || 0);
-      const dateB = new Date(b.dataIso || b.createdAt || 0);
-      return dateB - dateA;
+      // Garantir leads mais recentes no topo (Mais recentes -> Mais antigos)
+      return getTimestampFromLead(b) - getTimestampFromLead(a);
     });
 
-  // Paginação de 30 leads
   const LEADS_PER_PAGE = 30;
   const totalPages = Math.ceil(filteredLeads.length / LEADS_PER_PAGE) || 1;
   const currentLeads = filteredLeads.slice((currentPage - 1) * LEADS_PER_PAGE, currentPage * LEADS_PER_PAGE);
@@ -236,7 +276,7 @@ export default function App() {
 
         <div className="flex items-center gap-6">
           <div className="text-right">
-            <span className="text-xs text-gray-400 block">Total de Leads Validados</span>
+            <span className="text-xs text-gray-400 block">Total de Leads Únicos</span>
             <span className="text-2xl font-bold text-[#DB9C55]">{filteredLeads.length}</span>
           </div>
           <button 
@@ -249,9 +289,9 @@ export default function App() {
         </div>
       </header>
 
-      {/* Control Bar: Busca, Filtro por Etiquetas e Filtro por Data */}
+      {/* Control Bar */}
       <div className="flex flex-col md:flex-row gap-4 justify-between mb-6">
-        <div className="flex flex-col md:flex-row gap-4 flex-1">
+        <div className="flex flex-col md:flex-row gap-3 flex-1">
           <div className="relative flex-1">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
             <input 
@@ -277,20 +317,29 @@ export default function App() {
             </select>
           </div>
 
-          <div className="relative">
+          {/* Filtro por Período de Datas (De ... Até ...) */}
+          <div className="flex items-center gap-2 bg-[#1c1c1c] p-1.5 rounded-xl border border-gray-800">
             <input 
               type="date"
-              value={filterDate}
-              onChange={(e) => setFilterDate(e.target.value)}
-              className="bg-[#1c1c1c] border border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-300 focus:outline-none focus:border-[#DB9C55] cursor-pointer"
-              title="Filtrar por Data"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="bg-[#282828] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-[#DB9C55]"
+              title="Data Inicial"
             />
-            {filterDate && (
+            <span className="text-xs text-gray-500">até</span>
+            <input 
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="bg-[#282828] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-[#DB9C55]"
+              title="Data Final"
+            />
+            {(startDate || endDate) && (
               <button 
-                onClick={() => setFilterDate('')}
-                className="ml-2 text-xs text-rose-400 hover:underline"
+                onClick={() => { setStartDate(''); setEndDate(''); }}
+                className="text-[11px] text-rose-400 hover:underline px-2"
               >
-                Limpar Data
+                Limpar
               </button>
             )}
           </div>
@@ -301,11 +350,11 @@ export default function App() {
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
           <RefreshCw className="animate-spin mb-4 text-[#DB9C55]" size={32} />
-          <p className="text-sm">Carregando e ordenando leads em tempo real...</p>
+          <p className="text-sm">Sincronizando base de dados em tempo real...</p>
         </div>
       ) : currentLeads.length === 0 ? (
         <div className="text-center py-20 bg-[#1c1c1c] rounded-2xl border border-gray-800">
-          <p className="text-gray-400 text-sm">Nenhum lead encontrado.</p>
+          <p className="text-gray-400 text-sm">Nenhum lead encontrado para este filtro.</p>
         </div>
       ) : (
         <div className="space-y-3">
