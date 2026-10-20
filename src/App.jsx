@@ -8,7 +8,7 @@ import {
 import { initializeApp } from "firebase/app";
 import { 
   getFirestore, collection, onSnapshot, 
-  updateDoc, deleteDoc, doc, query, orderBy 
+  updateDoc, deleteDoc, doc, query
 } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -40,29 +40,29 @@ const TAG_OPTIONS = [
   { id: 'aguardando', label: 'Aguardando Contato', bg: '#6B7280', text: '#FFFFFF', icon: AlertCircle },
 ];
 
-// Helper para converter qualquer string/data para Timestamp numérico
-function getTimestampFromLead(lead) {
+// Função infalível para extrair o tempo real do lead para ordenação
+function getLeadTime(lead) {
   if (lead.createdAt) {
     const t = new Date(lead.createdAt).getTime();
-    if (!isNaN(t)) return t;
+    if (!isNaN(t) && t > 0) return t;
   }
   if (lead.dataIso) {
     const t = new Date(lead.dataIso).getTime();
-    if (!isNaN(t)) return t;
+    if (!isNaN(t) && t > 0) return t;
   }
   if (lead.data) {
     const parts = lead.data.split('/');
     if (parts.length === 3) {
-      const d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`);
+      const d = new Date(`${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}T12:00:00`);
       if (!isNaN(d.getTime())) return d.getTime();
     }
   }
   return 0;
 }
 
-// Helper para converter data para YYYY-MM-DD para comparações de filtro
-function getFormattedYMD(lead) {
-  const ts = getTimestampFromLead(lead);
+// Extrai data formatada YYYY-MM-DD para comparação precisa no filtro
+function getLeadYMD(lead) {
+  const ts = getLeadTime(lead);
   if (!ts) return '';
   const d = new Date(ts);
   const year = d.getFullYear();
@@ -99,7 +99,7 @@ export default function App() {
         ...doc.data()
       }));
 
-      // Desduplicação inteligente por Telefone + Nome
+      // Desduplicação por Telefone + Nome
       const uniqueLeads = [];
       const seenKeys = new Set();
 
@@ -116,7 +116,7 @@ export default function App() {
       setLeads(uniqueLeads);
       setLoading(false);
     }, (error) => {
-      console.error("Erro ao carregar do Firestore:", error);
+      console.error("Erro no Firestore:", error);
       setLoading(false);
     });
 
@@ -165,7 +165,7 @@ export default function App() {
     }
   };
 
-  // Filtragem e Ordenação
+  // Filtros + Ordenação dos MAIS RECENTES PRIMEIRO
   const filteredLeads = leads
     .filter(lead => {
       const nome = String(lead.nome || '').toLowerCase();
@@ -182,7 +182,7 @@ export default function App() {
       
       const matchesTag = filterTag === 'all' || lead.tag === filterTag;
       
-      const leadYMD = getFormattedYMD(lead);
+      const leadYMD = getLeadYMD(lead);
       let matchesStartDate = true;
       let matchesEndDate = true;
 
@@ -196,8 +196,8 @@ export default function App() {
       return matchesSearch && matchesTag && matchesStartDate && matchesEndDate;
     })
     .sort((a, b) => {
-      // Garantir leads mais recentes no topo (Mais recentes -> Mais antigos)
-      return getTimestampFromLead(b) - getTimestampFromLead(a);
+      // ORDENAÇÃO CRONOLÓGICA DECRESCENTE (Mais Recente -> Mais Antigo)
+      return getLeadTime(b) - getLeadTime(a);
     });
 
   const LEADS_PER_PAGE = 30;
@@ -276,7 +276,7 @@ export default function App() {
 
         <div className="flex items-center gap-6">
           <div className="text-right">
-            <span className="text-xs text-gray-400 block">Total de Leads Únicos</span>
+            <span className="text-xs text-gray-400 block">Total de Leads Reais</span>
             <span className="text-2xl font-bold text-[#DB9C55]">{filteredLeads.length}</span>
           </div>
           <button 
@@ -289,7 +289,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Control Bar */}
+      {/* Control Bar: Busca, Filtro de Etiquetas e Filtro de Período (De... Até...) */}
       <div className="flex flex-col md:flex-row gap-4 justify-between mb-6">
         <div className="flex flex-col md:flex-row gap-3 flex-1">
           <div className="relative flex-1">
@@ -319,19 +319,20 @@ export default function App() {
 
           {/* Filtro por Período de Datas (De ... Até ...) */}
           <div className="flex items-center gap-2 bg-[#1c1c1c] p-1.5 rounded-xl border border-gray-800">
+            <span className="text-xs text-gray-400 pl-2">De:</span>
             <input 
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="bg-[#282828] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-[#DB9C55]"
+              className="bg-[#282828] border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-[#DB9C55]"
               title="Data Inicial"
             />
-            <span className="text-xs text-gray-500">até</span>
+            <span className="text-xs text-gray-400">Até:</span>
             <input 
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="bg-[#282828] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-[#DB9C55]"
+              className="bg-[#282828] border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-[#DB9C55]"
               title="Data Final"
             />
             {(startDate || endDate) && (
@@ -350,11 +351,11 @@ export default function App() {
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
           <RefreshCw className="animate-spin mb-4 text-[#DB9C55]" size={32} />
-          <p className="text-sm">Sincronizando base de dados em tempo real...</p>
+          <p className="text-sm">Carregando leads em tempo real...</p>
         </div>
       ) : currentLeads.length === 0 ? (
         <div className="text-center py-20 bg-[#1c1c1c] rounded-2xl border border-gray-800">
-          <p className="text-gray-400 text-sm">Nenhum lead encontrado para este filtro.</p>
+          <p className="text-gray-400 text-sm">Nenhum lead encontrado para os filtros selecionados.</p>
         </div>
       ) : (
         <div className="space-y-3">
