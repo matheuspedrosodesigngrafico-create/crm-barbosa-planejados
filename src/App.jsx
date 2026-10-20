@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Plus, Search, ChevronDown, MessageSquare, MapPin, 
-  Tag, RefreshCw, LogOut, Trash2, Calendar, Clock,
+  Search, ChevronDown, MessageSquare, MapPin, 
+  Tag, RefreshCw, LogOut, Trash2, Calendar,
   Filter, CheckCircle2, XCircle, Clock3, MessageCircle, AlertCircle
 } from 'lucide-react';
 
 // Configuração e inicialização do Firebase
 import { initializeApp } from "firebase/app";
 import { 
-  getFirestore, collection, onSnapshot, addDoc, 
+  getFirestore, collection, onSnapshot, 
   updateDoc, deleteDoc, doc, query, orderBy 
 } from "firebase/firestore";
 
@@ -43,7 +43,11 @@ const TAG_OPTIONS = [
 ];
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  // Manter logado após o F5 usando localStorage
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('crm_authenticated') === 'true';
+  });
+  
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -52,10 +56,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTag, setFilterTag] = useState('all');
+  const [filterDate, setFilterDate] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [expandedLeadId, setExpandedLeadId] = useState(null);
 
-  // Escuta em tempo real do Firestore
+  // Escuta em tempo real do Firestore ordenando por criação
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -79,10 +84,16 @@ export default function App() {
     e.preventDefault();
     if (usernameInput === 'barbosaplanejados' && passwordInput === 'bleadsplanejados2026') {
       setIsAuthenticated(true);
+      localStorage.setItem('crm_authenticated', 'true');
       setLoginError('');
     } else {
       setLoginError('Usuário ou senha incorretos.');
     }
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('crm_authenticated');
   };
 
   const handleUpdateStatus = async (leadId, newStatus) => {
@@ -111,18 +122,44 @@ export default function App() {
     }
   };
 
-  // Filtros
-  const filteredLeads = leads.filter(lead => {
-    const matchesSearch = 
-      (lead.nome || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (lead.telefone || '').includes(searchTerm) ||
-      (lead.cidade || '').toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesTag = filterTag === 'all' || lead.tag === filterTag;
-    return matchesSearch && matchesTag;
-  });
+  // Filtragem e exclusão automática de leads dummy do Meta Ads
+  const filteredLeads = leads
+    .filter(lead => {
+      // Ignora dados de teste do Meta Ads
+      const nome = String(lead.nome || '').toLowerCase();
+      if (nome.includes('test lead') || nome.includes('dummy data') || nome === 'full_name') {
+        return false;
+      }
+      return true;
+    })
+    .filter(lead => {
+      const matchesSearch = 
+        (lead.nome || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (lead.telefone || '').includes(searchTerm) ||
+        (lead.cidade || '').toLowerCase().includes(searchTerm.toLowerCase());
+      
+      const matchesTag = filterTag === 'all' || lead.tag === filterTag;
+      
+      let matchesDate = true;
+      if (filterDate && lead.data) {
+        // Converte data DD/MM/AAAA para AAAA-MM-DD
+        const parts = lead.data.split('/');
+        if (parts.length === 3) {
+          const leadDateFormatted = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+          matchesDate = leadDateFormatted === filterDate;
+        }
+      }
 
-  // Paginação de 30
+      return matchesSearch && matchesTag && matchesDate;
+    })
+    .sort((a, b) => {
+      // Ordena garantindo os mais recentes primeiro
+      const dateA = new Date(a.dataIso || a.createdAt || 0);
+      const dateB = new Date(b.dataIso || b.createdAt || 0);
+      return dateB - dateA;
+    });
+
+  // Paginação de 30 leads
   const LEADS_PER_PAGE = 30;
   const totalPages = Math.ceil(filteredLeads.length / LEADS_PER_PAGE) || 1;
   const currentLeads = filteredLeads.slice((currentPage - 1) * LEADS_PER_PAGE, currentPage * LEADS_PER_PAGE);
@@ -199,11 +236,11 @@ export default function App() {
 
         <div className="flex items-center gap-6">
           <div className="text-right">
-            <span className="text-xs text-gray-400 block">Total de Leads</span>
-            <span className="text-2xl font-bold text-[#DB9C55]">{leads.length}</span>
+            <span className="text-xs text-gray-400 block">Total de Leads Validados</span>
+            <span className="text-2xl font-bold text-[#DB9C55]">{filteredLeads.length}</span>
           </div>
           <button 
-            onClick={() => setIsAuthenticated(false)}
+            onClick={handleLogout}
             className="p-3 bg-[#282828] hover:bg-rose-500/20 hover:text-rose-400 rounded-xl transition border border-gray-700"
             title="Sair"
           >
@@ -212,7 +249,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Control Bar */}
+      {/* Control Bar: Busca, Filtro por Etiquetas e Filtro por Data */}
       <div className="flex flex-col md:flex-row gap-4 justify-between mb-6">
         <div className="flex flex-col md:flex-row gap-4 flex-1">
           <div className="relative flex-1">
@@ -239,14 +276,32 @@ export default function App() {
               ))}
             </select>
           </div>
+
+          <div className="relative">
+            <input 
+              type="date"
+              value={filterDate}
+              onChange={(e) => setFilterDate(e.target.value)}
+              className="bg-[#1c1c1c] border border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-300 focus:outline-none focus:border-[#DB9C55] cursor-pointer"
+              title="Filtrar por Data"
+            />
+            {filterDate && (
+              <button 
+                onClick={() => setFilterDate('')}
+                className="ml-2 text-xs text-rose-400 hover:underline"
+              >
+                Limpar Data
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Main List */}
+      {/* Lista de Leads */}
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
           <RefreshCw className="animate-spin mb-4 text-[#DB9C55]" size={32} />
-          <p className="text-sm">Carregando leads do banco de dados...</p>
+          <p className="text-sm">Carregando e ordenando leads em tempo real...</p>
         </div>
       ) : currentLeads.length === 0 ? (
         <div className="text-center py-20 bg-[#1c1c1c] rounded-2xl border border-gray-800">
@@ -264,7 +319,6 @@ export default function App() {
                 className="bg-[#1c1c1c] border border-gray-800 rounded-2xl p-4 hover:border-[#DB9C55]/50 transition duration-200"
               >
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                  {/* Lead Main Info */}
                   <div className="flex items-start gap-4">
                     <div className="p-3 bg-[#282828] rounded-xl text-[#DB9C55]">
                       <Tag size={20} />
@@ -302,9 +356,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Actions & Accordion */}
                   <div className="flex items-center gap-3 self-end lg:self-center">
-                    {/* WhatsApp Action */}
                     {lead.telefone && (
                       <a 
                         href={`https://wa.me/${lead.telefone}?text=Olá%20${encodeURIComponent(lead.nome || '')},%20tudo%20bem?%20Vi%20seu%20contato%20no%20anúncio%20da%20Barbosa%20Planejados!`}
@@ -317,7 +369,6 @@ export default function App() {
                       </a>
                     )}
 
-                    {/* Expand Details/Status Accordion Button */}
                     <button 
                       onClick={() => setExpandedLeadId(isExpanded ? null : lead.id)}
                       className="flex items-center gap-1.5 bg-[#282828] hover:bg-gray-700 px-3 py-2 rounded-xl text-xs text-gray-300 transition border border-gray-700"
@@ -326,7 +377,6 @@ export default function App() {
                       <ChevronDown size={14} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
                     </button>
 
-                    {/* Delete */}
                     <button 
                       onClick={() => handleDeleteLead(lead.id)}
                       className="p-2 text-gray-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition"
@@ -337,10 +387,8 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Accordion Content */}
                 {isExpanded && (
                   <div className="mt-4 pt-4 border-t border-gray-800/80 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                    {/* Status Picker */}
                     <div>
                       <span className="block text-gray-400 font-medium mb-2">Alterar Status do Funil:</span>
                       <div className="flex flex-wrap gap-2">
@@ -358,7 +406,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Tag Picker */}
                     <div>
                       <span className="block text-gray-400 font-medium mb-2">Etiquetar Lead:</span>
                       <div className="flex flex-wrap gap-2">
@@ -375,7 +422,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Meta Info */}
                     <div className="md:col-span-2 bg-[#232323] p-3 rounded-xl border border-gray-800 text-gray-400 space-y-1">
                       {lead.anuncio && <p><strong className="text-gray-300">Anúncio:</strong> {lead.anuncio}</p>}
                       {lead.prazo && <p><strong className="text-gray-300">Prazo informado:</strong> {lead.prazo}</p>}
@@ -388,7 +434,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Pagination Footer */}
+      {/* Paginação */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-8 bg-[#1c1c1c] p-4 rounded-2xl border border-gray-800 text-xs text-gray-400">
           <span>Página {currentPage} de {totalPages}</span>
